@@ -1,0 +1,90 @@
+# Overleaf 公网入口
+
+把本机 Overleaf 通过 FRP 接到腾讯云，再由云服务器上的 Nginx 提供 HTTPS。Overleaf 自带协同编辑网页，不需要另写编辑器或将 Overleaf、MongoDB、编译服务搬到云上。
+
+公网入口为 **`https://124.223.191.114:8443/`**。本机 GDELT 的 FRP 客户端使用云端 TCP `7001`，因此 Overleaf 使用安全组中已经放行的 `8443`；这不会改变原有的 `https://124.223.191.114/DSI.html` 网站。
+
+```text
+浏览器 --HTTPS :8443--> 腾讯云 Nginx --127.0.0.1:18081--> FRP 服务端 :7000
+                                                                    ║ FRP TLS
+本机 Overleaf :8080 <-- FRP 客户端 ---------------------------------╝
+```
+
+FRP 的 `18081` 只监听腾讯云回环地址，不需要开放公网端口。FRPS 会重启一次，现有 FRP 隧道会短暂重连；原有站点配置和转发端口会保留。
+
+## 首次部署
+
+### 1. 本机 Overleaf 电脑
+
+此前已确认 Overleaf 的 `http://127.0.0.1:8080/status` 返回 HTTP 200。FRP 客户端配置需要有下面这个代理段：
+
+```toml
+[[proxies]]
+name = "overleaf"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8080
+remotePort = 18081
+```
+
+本机已有连接到 `124.223.191.114:7000` 的 MultiWorks FRP 客户端，服务为 `frpc.service`，配置文件为 `/etc/frp/frpc.toml`。GDELT 使用另一个客户端 `dsi-frpc.service`，连接云端 `7001`；不要把 Overleaf 配置加到 GDELT 客户端。认证令牌留在本机配置中，不要提交到 Git。
+
+本仓库维护者的本机 Overleaf 电脑已配置好该 FRPC 代理。云端允许端口尚未更新前，FRPC 日志可能显示 `port not allowed`；运行下面的云端脚本后，FRPS 会重启，客户端应自动重新连接。如果没有自动恢复，在本机执行 `sudo systemctl restart frpc.service`。若改在另一台电脑部署 Overleaf，则需将代理段追加到连接云端 `7000` 的 FRPC 配置并重启该客户端。
+
+### 2. 腾讯云服务器
+
+把仓库克隆到服务器（或进入已有克隆目录），然后执行：
+
+```bash
+cd /path/to/OLServer
+git pull --ff-only
+sudo ./deploy/cloud/setup.sh
+```
+
+脚本会自动完成这些操作：
+
+- 备份 FRPS 配置和脚本管理的 Nginx 站点文件。
+- 在现有 FRPS `allowPorts` 中追加 `18081`，保留 MultiWorks、GDELT 等原有端口。
+- 确认 FRP 代理仍绑定 `127.0.0.1`，不将内部转发端口暴露到公网。
+- 查找现有 Nginx 配置中的证书，并校验证书包含 IP `124.223.191.114` 且未过期。
+- 添加 Nginx HTTPS 监听 `8443`，代理到 `127.0.0.1:18081`。
+- 验证 FRPS 和 Nginx 配置后重启 FRPS、平滑重载 Nginx。
+
+脚本需要云服务器已有 Nginx、FRPS、Python 3.11+、OpenSSL，并且云安全组已经允许 TCP `8443`。目前的腾讯云安全组清单已放行该端口。云端 FRPS 默认配置路径为 `/etc/frp/frps.toml`、服务名为 `frps.service`；若实际路径或服务名不同，可这样执行：
+
+```bash
+sudo env FRPS_CONFIG=/实际路径/frps.toml FRPS_SERVICE=实际服务名 ./deploy/cloud/setup.sh
+```
+
+脚本会尝试复用现有 HTTPS 站点的 IP 证书。如果 Nginx 中没有可用证书，脚本会停止并说明原因，不会改成不安全的 HTTP。可以通过 `OVERLEAF_CERT_FILE` 和 `OVERLEAF_KEY_FILE` 指定有效证书与私钥路径。
+
+例如，证书文件路径为 `/etc/letsencrypt/live/124.223.191.114/` 时：
+
+```bash
+sudo env \
+  OVERLEAF_CERT_FILE=/etc/letsencrypt/live/124.223.191.114/fullchain.pem \
+  OVERLEAF_KEY_FILE=/etc/letsencrypt/live/124.223.191.114/privkey.pem \
+  ./deploy/cloud/setup.sh
+```
+
+若 FRPS 或 Nginx 配置验证失败，脚本会在重启服务前退出。修改前的 FRPS 和 Nginx 配置备份保存在 `/var/backups/overleaf-frp/`。
+
+## 验证
+
+FRPC 已连接且云端脚本成功运行后，在腾讯云执行：
+
+```bash
+curl -i http://127.0.0.1:18081/status
+```
+
+应返回 HTTP 200。然后从外部设备打开 **<https://124.223.191.114:8443/>**。Nginx 会处理 Overleaf 的 WebSocket 协作连接和大文件上传。
+
+若当前 Overleaf 安装支持这些设置，将其公开站点地址配置为 `https://124.223.191.114:8443`，并启用 `OVERLEAF_BEHIND_PROXY=true`、`OVERLEAF_SECURE_COOKIE=true`。具体配置文件及应用方式取决于安装类型；旧版本可能使用 `SHARELATEX_` 前缀。[Overleaf 环境变量文档](https://docs.overleaf.com/on-premises/configuration/overleaf-toolkit/environment-variables)
+
+### IP 证书
+
+若现有 IP 证书不受信任或不包含 IP SAN，可以使用 Let’s Encrypt 的 IP 地址证书。Certbot 5.4+ 支持申请；IP 证书有效期为 6 天，必须配置自动续期和续期后的 Nginx reload。[Let’s Encrypt IP 证书说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)
+
+## 云服务器资源
+
+FRP 和 Nginx 转发本身通常可运行在 2核2G 上；Overleaf 和论文编译仍在本机运行。但你提供的控制台摘要显示当前实例为 4核4GB，已用内存约 2.34GB，若还承载其他服务，不建议将这台实例降至 2GB。3Mbps 公网带宽会限制大文件上传、下载和同步速度。

@@ -1,0 +1,11 @@
+# Append this proxy block to the existing FRPC config connected to the Tencent
+# Cloud FRPS server. Do not commit the real auth token.
+# The serverAddr/serverPort/auth/transport settings belong to the existing
+# client config and should remain unchanged.
+
+[[proxies]]
+name = "overleaf"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8080
+remotePort = 18081

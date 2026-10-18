@@ -1,0 +1,34 @@
+# Tencent Cloud public IP: 124.223.191.114
+# Use a trusted certificate whose SAN contains this IP address.
+# TCP 8443 must be allowed by the security group and free on the cloud host.
+
+server {
+    listen 8443 ssl;
+    server_name 124.223.191.114;
+
+    # Replace with the existing valid IP certificate, or a renewed
+    # Let's Encrypt IP certificate.
+    ssl_certificate     /etc/letsencrypt/live/124.223.191.114/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/124.223.191.114/privkey.pem;
+
+    client_max_body_size 100m;
+
+    location / {
+        proxy_pass http://127.0.0.1:18081;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $http_host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port  8443;
+
+        # Overleaf uses WebSockets for real-time collaboration.
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+    }
+}

@@ -1,0 +1,10 @@
+# Merge this entry into the existing FRPS configuration. Preserve every
+# allowPorts entry already used by MultiWorks, GDELT, or other services.
+allowPorts = [{ single = 18080 }, { single = 18081 }]
+
+# The existing FRPS configuration should continue to include:
+# bindPort = 7000
+# proxyBindAddr = "127.0.0.1"
+# transport.tls.force = true
+# auth.method = "token"
+# auth.token = "<same secret configured on FRPC clients>"
