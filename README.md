@@ -81,6 +81,44 @@ curl -i http://127.0.0.1:18081/status
 
 若当前 Overleaf 安装支持这些设置，将其公开站点地址配置为 `https://124.223.191.114:8443`，并启用 `OVERLEAF_BEHIND_PROXY=true`、`OVERLEAF_SECURE_COOKIE=true`。具体配置文件及应用方式取决于安装类型；旧版本可能使用 `SHARELATEX_` 前缀。[Overleaf 环境变量文档](https://docs.overleaf.com/on-premises/configuration/overleaf-toolkit/environment-variables)
 
+## Overleaf DeepSeek AI（自托管 Toolkit）
+
+本仓库还包含一个针对当前本机 Overleaf Toolkit 镜像的自定义构建：
+
+- CodeMirror 源码编辑器停顿后请求 DeepSeek FIM 补全；按 `Tab` 接受，按 `Esc` 忽略。
+- 选中源码后点击编辑器工具栏里的“AI 修改”，输入自然语言指令，检查 LaTeX 修改预览后再应用。
+- 仅站点管理员能在 `/admin` 的 **AI Assistant** 页设置模型、API Key 和功能开关。API Key 在服务端加密存入 MongoDB，不会发给浏览器或显示回管理页面。
+
+补全仅发送光标前最多 1,800 个字符和后最多 800 个字符；选区修改仅发送选中内容及两侧最多 2,000 个字符。请求由本机 Overleaf 后端通过 HTTPS 发给 DeepSeek。每个账户的补全限制为每分钟 45 次，选区修改限制为每分钟 15 次。DeepSeek 的 FIM 接口目前标为 Beta；本实现固定使用 DeepSeek API，补全使用 `deepseek-flash`，选区修改可以在管理页选择 `deepseek-flash` 或 `deepseek-v4-pro`。[DeepSeek FIM 接口](https://api-docs.deepseek.com/guides/fim_completion) [DeepSeek Chat Completions 接口](https://api-docs.deepseek.com/api/create-chat-completion/)
+
+### 构建并启用
+
+在运行 Overleaf 的本机电脑上，从本仓库根目录执行：
+
+```bash
+git pull --ff-only
+sudo ./deploy/local/build-overleaf-ai.sh
+sudo /opt/overleaf/toolkit/bin/up -d
+```
+
+构建脚本只支持本项目当前使用的 Overleaf Toolkit 镜像版本 `6.3.1-with-texlive-full`。脚本会构建 `ofserver/overleaf-ai:6.3.1-with-texlive-full`，备份 Toolkit 的镜像配置，并在 `config/variables.env` 中生成一次性的 `OVERLEAF_AI_SETTINGS_SECRET`。构建成功后执行 `bin/up -d` 才会重启并启用自定义镜像；原 Overleaf 项目和数据库目录会继续使用原有挂载数据。
+
+然后用站点管理员账号登录 Overleaf，打开 `/admin` → **AI Assistant**，选模型、填入 DeepSeek API Key、勾选启用并保存。之后在源码编辑器中停顿即可看到补全建议；选中文字后使用工具栏的“AI 修改”按钮。
+
+### 迁移和备份
+
+迁移时需要同时保留/备份：
+
+- 本仓库的 `overleaf-ai/` 和 `deploy/local/`。
+- Overleaf Toolkit 的 `config/overleaf.rc`、`config/version`、`config/variables.env`。
+- Overleaf Toolkit 的 `data/` 目录（尤其是 MongoDB 和 Overleaf 项目文件）。
+
+`OVERLEAF_AI_SETTINGS_SECRET` 必须和 MongoDB 一起备份；丢失后将无法解密数据库里已保存的 DeepSeek API Key。不要把 `config/variables.env` 或 API Key 提交到 Git。迁移到兼容的 Overleaf 6.3.1 Toolkit 后，在新主机上从本仓库执行构建命令并运行 Toolkit 的 `bin/up -d`。
+
+构建脚本会在 `config/overleaf.rc.bak-ai-*` 留下原设置副本。要回滚镜像，恢复该文件到 `config/overleaf.rc`，再执行 Toolkit 的 `bin/up -d`；原有项目数据不会因为切换回基础镜像而删除。
+
+此 AI 集成针对固定的 Overleaf 6.3.1 源码版本。升级 Overleaf 前需要重新对照上游编辑器和管理页代码并重建；不要直接把此补丁套到其他版本。
+
 ### IP 证书
 
 若现有 IP 证书不受信任或不包含 IP SAN，可以使用 Let’s Encrypt 的 IP 地址证书。Certbot 5.4+ 支持申请；IP 证书有效期为 6 天，必须配置自动续期和续期后的 Nginx reload。[Let’s Encrypt IP 证书说明](https://letsencrypt.org/2026/03/11/shorter-certs-certbot)
